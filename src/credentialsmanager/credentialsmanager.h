@@ -60,6 +60,8 @@ class CredentialsManager : public QObject {
 
   static constexpr char kSettingsGroup[] = "CredentialsManager";
   static constexpr char kBackend[] = "backend";
+  // The backend which stored a password in Auto mode, it's used first on the next start, so the passwords are not looked up in another backend.
+  static constexpr char kAutoBackend[] = "auto_backend";
 
   static QString BackendToString(const BackendType backend);
   static BackendType BackendFromString(const QString &backend);
@@ -80,6 +82,12 @@ class CredentialsManager : public QObject {
   // Deletes the password for the service, finishes with Success if the password is deleted or did not exist.
   [[nodiscard]] CredentialsReplyPtr DeletePasswordAsync(const QString &service);
 
+ protected:
+  // Returns the automatically detected backends in order of preference.
+  virtual QList<BackendType> AutoBackendTypes() const;
+
+  virtual ScopedPtr<CredentialsBackendInterface> CreateBackend(const BackendType backend_type);
+
  private:
   enum class RequestType {
     Read,
@@ -99,14 +107,21 @@ class CredentialsManager : public QObject {
     Ready
   };
 
-  // Returns the automatically detected backends in order of preference.
-  static QList<BackendType> AutoBackendTypes();
-
-  ScopedPtr<CredentialsBackendInterface> CreateBackend(const BackendType backend_type);
-
   void AddRequest(const Request &request);
   void StartNextRequest();
   void RequestFinished(const Request &request, const CredentialsResult &credentials_result);
+  // Finishes the request, password_in_backend is true when the password is stored in the current backend.
+  void FinishRequest(const Request &request, const CredentialsResult &credentials_result, const bool password_in_backend);
+
+  // Reads a password not found in a secure backend in Auto mode from the settings file, and moves it to the secure backend.
+  void MovePasswordFromSettings(const Request &request);
+  void SettingsPasswordRead(const Request &request, const CredentialsResult &settings_result);
+  void SettingsPasswordSaved(const Request &request, const CredentialsResult &settings_result, const CredentialsResult &save_result);
+  // Deletes a password deleted from a secure backend in Auto mode from the settings file too.
+  void DeletePasswordFromSettings(const Request &request, const CredentialsResult &credentials_result);
+
+  // The backend selected in the settings, or in Auto mode the backend which stored passwords before.
+  BackendType preferred_backend_type() const { return backend_type_ != BackendType::Auto ? backend_type_ : auto_backend_type_; }
 
   void InitializeBackend();
   void CheckNextBackend();
@@ -115,12 +130,17 @@ class CredentialsManager : public QObject {
 
  private:
   BackendType backend_type_;
+  BackendType auto_backend_type_;
   bool reset_backend_;
   BackendState backend_state_;
   ScopedPtr<CredentialsBackendInterface> backend_;
+  // The settings file backend, while a password is moved from it.
+  ScopedPtr<CredentialsBackendInterface> settings_backend_;
+  BackendType current_backend_type_;
 
   QList<BackendType> candidate_backend_types_;
   ScopedPtr<CredentialsBackendInterface> candidate_backend_;
+  BackendType candidate_backend_type_;
   bool candidate_backend_is_selected_;
 
   QQueue<Request> requests_;
